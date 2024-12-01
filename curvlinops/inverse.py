@@ -762,6 +762,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             # Attributes
             "damping": self._damping,
             "use_heuristic_damping": self._use_heuristic_damping,
+            "use_eigenvalue_percentage_damping": self._use_eigenvalue_percentage_damping,
             "min_damping": self._min_damping,
             "use_exact_damping": self._use_exact_damping,
             "cache": self._cache,
@@ -782,6 +783,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         # Set attributes
         self._damping = state_dict["damping"]
         self._use_heuristic_damping = state_dict["use_heuristic_damping"]
+        self._use_eigenvalue_percentage_damping = state_dict["use_eigenvalue_percentage_damping"]
         self._min_damping = state_dict["min_damping"]
         self._use_exact_damping = state_dict["use_exact_damping"]
         self._cache = state_dict["cache"]
@@ -808,6 +810,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             A,
             damping=state_dict["damping"],
             use_heuristic_damping=state_dict["use_heuristic_damping"],
+            use_eigenvalue_percentage_damping=state_dict["use_eigenvalue_percentage_damping"],
             min_damping=state_dict["min_damping"],
             use_exact_damping=state_dict["use_exact_damping"],
             cache=state_dict["cache"],
