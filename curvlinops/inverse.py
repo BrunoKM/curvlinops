@@ -300,6 +300,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         A: KFACLinearOperator,
         damping: Union[float, Tuple[float, float]] = 0.0,
         use_heuristic_damping: bool = False,
+        use_eigenvalue_percentage_damping: bool = False,
         min_damping: float = 1e-8,
         use_exact_damping: bool = False,
         cache: bool = True,
@@ -323,6 +324,15 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                 :math:`\max(\pi\; \sqrt{\text{damping}}, \text{min_damping})` and for the
                 gradient covariances :math:`B` to
                 :math:`\max(\frac{1}{\pi}\; \sqrt{\text{damping}}, \text{min_damping})`.
+                Default: ``False``.
+            use_eigenvalue_percentage_damping: Whether to use eigenvalue percentage
+                damping heuristic described by
+                `Grosse, Bae and Anil et al., 2023 <https://arxiv.org/abs/2308.03296>`.
+                When ``True``, the damping value for each layer (each block in the
+                blockwise approximation to the Fisher/GGN matrix) is set to a percentage
+                of the mean eigenvalue of the Fisher/GGN approximation for that layer.
+                `damping` is then the percentage (between 0 and 1) used for damping.
+                `Grosse, Bae and Anil et al., 2023` recommend a value of 0.1.
                 Default: ``False``.
             min_damping: Minimum damping value. Only used if ``use_heuristic_damping``
                 is ``True``. Default: ``1e-8``.
@@ -351,6 +361,21 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         self._A = A
         if use_heuristic_damping and use_exact_damping:
             raise ValueError("Either use heuristic damping or exact damping, not both.")
+        if use_eigenvalue_percentage_damping and use_heuristic_damping:
+            raise ValueError(
+                "Heuristic damping cannot be used in conjunction with eigenvalue "
+                "percentage damping."
+            )
+        if use_eigenvalue_percentage_damping and isinstance(damping, tuple):
+            raise ValueError(
+                "Eigenvalue percentage damping requires a single damping value."
+            )
+        if use_eigenvalue_percentage_damping and not (0.0 <= damping <= 1.0):
+            raise ValueError(
+                "`damping` for eigenvalue percentage damping must be between 0 and 1."
+            )
+        if use_eigenvalue_percentage_damping and not use_exact_damping:
+            raise ValueError("Eigenvalue percentage damping requires exact damping.")
         if (use_heuristic_damping or use_exact_damping) and isinstance(damping, tuple):
             raise ValueError(
                 "Heuristic and exact damping require a single damping value."
@@ -358,6 +383,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
 
         self._damping = damping
         self._use_heuristic_damping = use_heuristic_damping
+        self._use_eigenvalue_percentage_damping = use_eigenvalue_percentage_damping
         self._min_damping = min_damping
         self._use_exact_damping = use_exact_damping
         self._cache = cache
@@ -530,7 +556,19 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                 ggT_eigvecs, M_joint, aaT_eigvecs, "i j, m i k, k l -> m j l"
             )
             # Divide by damped eigenvalues to perform the inversion.
-            M_joint.div_(outer(ggT_eigvals, aaT_eigvals).add_(self._damping))
+            if self._use_eigenvalue_percentage_damping:
+                # The mean eigenvalue of a Kronecker product is the product of the mean
+                # eigenvalues of the factor matrices.
+                mean_eigval = (aaT_eigvals.mean() * ggT_eigvals.mean())
+                damping = self._damping * mean_eigval
+            else:
+                damping = self._damping
+            M_joint.div_(outer(ggT_eigvals, aaT_eigvals).add_(damping))
+            # TODO: I think eigenvalue_percentage_damping could be more concisely
+            # written as: 
+            # eigval_outer_product = outer(ggT_eigvals, aaT_eigvals)
+            # eigval_outer_product.add_(self._damping * eigval_outer_product.mean())
+            # M_joint.div_(eigval_outer_product)
             # Transform back to standard basis.
             M_joint = einsum(
                 ggT_eigvecs, M_joint, aaT_eigvecs, "i j, m j k, l k -> m i l"
@@ -586,14 +624,24 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                 # Divide by damped eigenvalues to perform the inversion and transform
                 # back to standard basis.
                 if p_name == "weight":
-                    M_torch[pos].div_(
-                        outer(ggT_eigvals, aaT_eigvals).add_(self._damping)
-                    )
+                    if self._use_eigenvalue_percentage_damping:
+                        # The mean eigenvalue of a Kronecker product is the product of the mean
+                        # eigenvalues of the factor matrices.
+                        mean_eigval = (aaT_eigvals.mean() * ggT_eigvals.mean())
+                        damping = self._damping * mean_eigval
+                    else:
+                        damping = self._damping
+                    M_torch[pos].div_(outer(ggT_eigvals, aaT_eigvals).add_(damping))
                     M_torch[pos] = einsum(
                         M_torch[pos], aaT_eigvecs, "m i j, k j -> m i k"
                     )
                 else:
-                    M_torch[pos].div_(ggT_eigvals.add(self._damping))
+                    if self._use_eigenvalue_percentage_damping:
+                        mean_eigval = ggT_eigvals.mean()
+                        damping = self._damping * mean_eigval
+                    else:
+                        damping = self._damping
+                    M_torch[pos].div_(ggT_eigvals.add(damping))
                 M_torch[pos] = einsum(
                     ggT_eigvecs, M_torch[pos], "i j, m j ... -> m i ..."
                 )
